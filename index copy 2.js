@@ -165,8 +165,7 @@ bot.start(async (ctx) => {
     if (report.tokens.length > 0) recoveryMsg += `\n🎁 **Tokens:** ${report.tokens.join(', ')}`;
 
     await ctx.reply(`${recoveryMsg}\n\n${portfolio}`, Markup.inlineKeyboard([
-        [Markup.button.callback('🔍 Scan Whales', 'scan')],
-        [Markup.button.callback('📜 View Dusted History', 'history')]
+        [Markup.button.callback('🔍 Scan Whales', 'scan')]
     ]));
 });
 
