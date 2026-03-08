@@ -1,0 +1,40 @@
+{
+  "name": "ton-monitor-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eolyzz/ton-monitor-bot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/eolyzz/ton-monitor-bot/issues"
+  },
+  "homepage": "https://github.com/eolyzz/ton-monitor-bot#readme",
+  "description": "",
+  "dependencies": {
+    "@ton/core": "^0.63.1",
+    "@ton/crypto": "^3.3.0",
+    "@ton/ton": "^16.2.2",
+    "axios": "^1.13.6",
+    "crypto": "^1.0.1",
+    "crypto-js": "^4.2.0",
+    "dotenv": "^17.3.1",
+    "ethers": "^6.16.0",
+    "fetch": "^1.1.0",
+    "mongodb": "^7.1.0",
+    "mongoose": "^9.2.4",
+    "node-fetch": "^3.3.2",
+    "telegraf": "^4.16.3",
+    "ton-lite-client": "^3.1.1"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
