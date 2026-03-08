@@ -39,11 +39,11 @@ const masterWallet = new ethers.Wallet(process.env.MASTER_PRIVATE_KEY, provider)
 
 // --- 3. Bot & Provider Setup --- (REPLACE THIS SECTION)
 const TOKENS = {
-    USDT: { addr: "0xdAC17F958D2ee523a2206206994597C13D831ec7", dec: 6, min: 50000 },
-    USDC: { addr: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", dec: 6, min: 50000 },
-    WBTC: { addr: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", dec: 8, min: 1 },
-    WETH: { addr: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", dec: 18, min: 20 },
-    DAI:  { addr: "0x6B175474E89094C44Da98b954EedeAC495271d0F", dec: 18, min: 50000 }
+    USDT: { addr: "0xdAC17F958D2ee523a2206206994597C13D831ec7", dec: 6, min: 5000 },
+    USDC: { addr: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", dec: 6, min: 5000 },
+    WBTC: { addr: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", dec: 8, min: 0.1 },
+    WETH: { addr: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", dec: 18, min: 2 },
+    DAI:  { addr: "0x6B175474E89094C44Da98b954EedeAC495271d0F", dec: 18, min: 5000 }
 };
 
 // --- 4. Free Whale Fetcher (Recent Transfers) ---
