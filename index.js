@@ -154,11 +154,14 @@ bot.action(/^scan_db_(\d+)$/, async (ctx) => {
 // --- 7. Manual Attack Logic (With Live Progress Updates) ---
 bot.hears(/^\/attack (0x[a-fA-F0-9]{40})$/i, async (ctx) => {
     const target = ctx.match[1].toLowerCase();
-    const prefix = target.substring(2, 5); // 0x + 3 chars = 5
+    
+    // Logic for 3 prefix (after 0x) and 4 suffix
+    const prefix = target.substring(2, 5); // Index 2, 3, 4 (3 chars)
     const suffix = target.slice(-4);       // Last 4 chars
 
     const statusMsg = await ctx.reply(`🛰️ **Targeting:** \`${target}\`\n⚙️ Status: **Starting Engine...**`, { parse_mode: 'Markdown' });
 
+    // Passing the 3/4 pattern to the worker
     const worker = new Worker(__filename, { workerData: { prefix, suffix } });
     let lastUiUpdate = Date.now();
 
@@ -169,7 +172,7 @@ bot.hears(/^\/attack (0x[a-fA-F0-9]{40})$/i, async (ctx) => {
                     ctx.chat.id, 
                     statusMsg.message_id, 
                     null, 
-                    `🛰️ **Targeting:** \`${target}\` (5/4 Match)\n` +
+                    `🛰️ **Targeting:** \`${target}\` (3/4 Match)\n` +
                     `⚙️ Status: **Brute-forcing...**\n` +
                     `🔢 Attempts: \`${msg.attempts.toLocaleString()}\`\n` +
                     `⚡ Speed: \`${msg.speed} addr/s\``,

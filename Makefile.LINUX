@@ -1,0 +1,20 @@
+CC=g++
+CDEFINES=
+SOURCES=Dispatcher-LINUX.cpp Mode.cpp precomp.cpp profanity.cpp SpeedSample.cpp
+OBJECTS=$(SOURCES:.cpp=.o)
+EXECUTABLE=profanity3.x64
+
+LDFLAGS=-s -lOpenCL -mcmodel=large
+CFLAGS=-c -std=c++11 -Wall -mmmx -O2 -mcmodel=large -DCL_TARGET_OPENCL_VERSION=300
+
+all: $(SOURCES) $(EXECUTABLE)
+
+$(EXECUTABLE): $(OBJECTS)
+	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
+
+.cpp.o:
+	$(CC) $(CFLAGS) $(CDEFINES) $< -o $@
+
+clean:
+	rm -rf *.o
+
